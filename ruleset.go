@@ -18,7 +18,7 @@ type PermitDestAddrPatternRuleSet struct {
 	AllowedFqdnPattern string
 }
 
-func (p *PermitDestAddrPatternRuleSet) Allow(ctx context.Context, req *socks5.Request) (context.Context, bool) {
+func (p *PermitDestAddrPatternRuleSet) Allow(ctx context.Context, req *socks5.Request) bool {
 	match, _ := regexp.MatchString(p.AllowedFqdnPattern, req.DestAddr.FQDN)
-	return ctx, match
+	return match
 }

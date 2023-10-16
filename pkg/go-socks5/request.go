@@ -36,7 +36,7 @@ var (
 
 // AddressRewriter is used to rewrite a destination transparently
 type AddressRewriter interface {
-	Rewrite(ctx context.Context, request *Request) (context.Context, *AddrSpec)
+	Rewrite(ctx context.Context, request *Request) *AddrSpec
 }
 
 // AddrSpec is used to return the target AddrSpec
@@ -121,21 +121,20 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 	// Resolve the address if we have a FQDN
 	dest := req.DestAddr
 	if dest.FQDN != "" {
-		ctx_, addr, err := s.config.Resolver.Resolve(ctx, dest.FQDN)
+		addr, err := s.config.Resolver.Resolve(ctx, dest.FQDN)
 		if err != nil {
 			if err := sendReply(conn, hostUnreachable, nil); err != nil {
 				return fmt.Errorf("Failed to send reply: %v", err)
 			}
 			return fmt.Errorf("Failed to resolve destination '%v': %v", dest.FQDN, err)
 		}
-		ctx = ctx_
 		dest.IP = addr
 	}
 
 	// Apply any address rewrites
 	req.realDestAddr = req.DestAddr
 	if s.config.Rewriter != nil {
-		ctx, req.realDestAddr = s.config.Rewriter.Rewrite(ctx, req)
+		req.realDestAddr = s.config.Rewriter.Rewrite(ctx, req)
 	}
 
 	// Switch on the command
@@ -157,23 +156,15 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
 	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	if ok := s.config.Rules.Allow(ctx, req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("Failed to send reply: %v", err)
 		}
 		return fmt.Errorf("Connect to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
 	}
 
 	// Attempt to connect
-	dial := s.config.Dial
-	if dial == nil {
-		dial = func(ctx context.Context, net_, addr string) (net.Conn, error) {
-			return net.Dial(net_, addr)
-		}
-	}
-	target, err := dial(ctx, "tcp", req.realDestAddr.Address())
+	target, err := s.dial(ctx, "tcp", req.realDestAddr.Address())
 	if err != nil {
 		msg := err.Error()
 		resp := hostUnreachable
@@ -215,13 +206,11 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 // handleBind is used to handle a connect command
 func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error {
 	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	if ok := s.config.Rules.Allow(ctx, req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("Failed to send reply: %v", err)
 		}
 		return fmt.Errorf("Bind to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
 	}
 
 	// TODO: Support bind
@@ -234,13 +223,11 @@ func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error 
 // handleAssociate is used to handle a connect command
 func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) error {
 	// Check if this is allowed
-	if ctx_, ok := s.config.Rules.Allow(ctx, req); !ok {
+	if ok := s.config.Rules.Allow(ctx, req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
 			return fmt.Errorf("Failed to send reply: %v", err)
 		}
 		return fmt.Errorf("Associate to %v blocked by rules", req.DestAddr)
-	} else {
-		ctx = ctx_
 	}
 
 	// TODO: Support associate
@@ -250,109 +237,18 @@ func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) e
 	return nil
 }
 
-// readAddrSpec is used to read AddrSpec.
-// Expects an address type byte, follwed by the address and port
-func readAddrSpec(r io.Reader) (*AddrSpec, error) {
-	d := &AddrSpec{}
-
-	// Get the address type
-	addrType := []byte{0}
-	if _, err := r.Read(addrType); err != nil {
-		return nil, err
+func (s *Server) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	if s.config.Dial != nil {
+		return s.config.Dial(ctx, network, addr)
 	}
-
-	// Handle on a per type basis
-	switch addrType[0] {
-	case ipv4Address:
-		addr := make([]byte, 4)
-		if _, err := io.ReadAtLeast(r, addr, len(addr)); err != nil {
-			return nil, err
-		}
-		d.IP = net.IP(addr)
-
-	case ipv6Address:
-		addr := make([]byte, 16)
-		if _, err := io.ReadAtLeast(r, addr, len(addr)); err != nil {
-			return nil, err
-		}
-		d.IP = net.IP(addr)
-
-	case fqdnAddress:
-		if _, err := r.Read(addrType); err != nil {
-			return nil, err
-		}
-		addrLen := int(addrType[0])
-		fqdn := make([]byte, addrLen)
-		if _, err := io.ReadAtLeast(r, fqdn, addrLen); err != nil {
-			return nil, err
-		}
-		d.FQDN = string(fqdn)
-
-	default:
-		return nil, unrecognizedAddrType
-	}
-
-	// Read the port
-	port := []byte{0, 0}
-	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
-		return nil, err
-	}
-	d.Port = (int(port[0]) << 8) | int(port[1])
-
-	return d, nil
-}
-
-// sendReply is used to send a reply message
-func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
-	// Format the address
-	var addrType uint8
-	var addrBody []byte
-	var addrPort uint16
-	switch {
-	case addr == nil:
-		addrType = ipv4Address
-		addrBody = []byte{0, 0, 0, 0}
-		addrPort = 0
-
-	case addr.FQDN != "":
-		addrType = fqdnAddress
-		addrBody = append([]byte{byte(len(addr.FQDN))}, addr.FQDN...)
-		addrPort = uint16(addr.Port)
-
-	case addr.IP.To4() != nil:
-		addrType = ipv4Address
-		addrBody = []byte(addr.IP.To4())
-		addrPort = uint16(addr.Port)
-
-	case addr.IP.To16() != nil:
-		addrType = ipv6Address
-		addrBody = []byte(addr.IP.To16())
-		addrPort = uint16(addr.Port)
-
-	default:
-		return fmt.Errorf("Failed to format address: %v", addr)
-	}
-
-	// Format the message
-	msg := make([]byte, 6+len(addrBody))
-	msg[0] = socks5Version
-	msg[1] = resp
-	msg[2] = 0 // Reserved
-	msg[3] = addrType
-	copy(msg[4:], addrBody)
-	msg[4+len(addrBody)] = byte(addrPort >> 8)
-	msg[4+len(addrBody)+1] = byte(addrPort & 0xff)
-
-	// Send the message
-	_, err := w.Write(msg)
-	return err
+	return net.Dial(network, addr)
 }
 
 type closeWriter interface {
 	CloseWrite() error
 }
 
-// proxy is used to suffle data from src to destination, and sends errors
+// proxy is used to shuffle data from src to destination, and sends errors
 // down a dedicated channel
 func proxy(dst io.Writer, src io.Reader, errCh chan error) {
 	_, err := io.Copy(dst, src)

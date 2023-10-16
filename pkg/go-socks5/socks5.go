@@ -119,7 +119,6 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 		go s.ServeConn(conn)
 	}
-	return nil
 }
 
 // SetIPWhitelist sets the function to check if a given IP is allowed
