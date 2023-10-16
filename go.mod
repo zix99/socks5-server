@@ -1,4 +1,4 @@
-module github.com/serjs/socks5-server
+module github.com/zix99/socks5-server-ng
 
 go 1.19
 

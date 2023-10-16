@@ -1,7 +1,6 @@
-# go-socks5-proxy
+# go-socks5-proxy-ng
 
-![Latest tag from master branch](https://github.com/serjs/socks5-server/workflows/Latest%20tag%20from%20master%20branch/badge.svg)
-![Release tag](https://github.com/serjs/socks5-server/workflows/Release%20tag/badge.svg)
+Based on [serjs/socks5-server](https://github.com/serjs/socks5-server) with modern go features, metrics, and more configurability.
 
 Simple socks5 server using go-socks5 with authentication, allowed ips list and destination FQDNs filtering
 
@@ -57,3 +56,13 @@ or
 * **Sergey Bogayrets**
 
 See also the list of [contributors](https://github.com/serjs/socks5-server/graphs/contributors) who participated in this project.
+
+# Todo
+
+- General cleanup, modernization, etc
+- IP support masking (CIDR)
+- multi FQDN regex with pre-compile testing and optimizations
+- metrics, possibly exposed via prometheus-style endpoint, with status lander
+
+# License
+MIT

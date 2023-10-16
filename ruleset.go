@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"regexp"
 
 	"github.com/armon/go-socks5"
-	"golang.org/x/net/context"
 )
 
 // PermitDestAddrPattern returns a RuleSet which selectively allows addresses
