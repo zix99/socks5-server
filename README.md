@@ -63,6 +63,7 @@ See also the list of [contributors](https://github.com/serjs/socks5-server/graph
 - IP support masking (CIDR)
 - multi FQDN regex with pre-compile testing and optimizations
 - metrics, possibly exposed via prometheus-style endpoint, with status lander
+- support associate/udp (https://quic.nginx.org/)
 
 # License
 MIT

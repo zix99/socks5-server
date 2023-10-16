@@ -4,7 +4,7 @@ import (
 	"context"
 	"regexp"
 
-	"github.com/armon/go-socks5"
+	"socks5-server-ng/pkg/go-socks5"
 )
 
 // PermitDestAddrPattern returns a RuleSet which selectively allows addresses
