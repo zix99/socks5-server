@@ -8,17 +8,20 @@ import (
 )
 
 // PermitDestAddrPattern returns a RuleSet which selectively allows addresses
-func PermitDestAddrPattern(pattern string) socks5.RuleSet {
-	return &PermitDestAddrPatternRuleSet{pattern}
+func PermitDestAddrPattern(pattern string) (socks5.RuleSet, error) {
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return &PermitDestAddrPatternRuleSet{r}, nil
 }
 
 // PermitDestAddrPatternRuleSet is an implementation of the RuleSet which
 // enables filtering supported destination address
 type PermitDestAddrPatternRuleSet struct {
-	AllowedFqdnPattern string
+	re *regexp.Regexp
 }
 
 func (p *PermitDestAddrPatternRuleSet) Allow(ctx context.Context, req *socks5.Request) bool {
-	match, _ := regexp.MatchString(p.AllowedFqdnPattern, req.DestAddr.FQDN)
-	return match
+	return p.re.MatchString(req.DestAddr.FQDN)
 }
