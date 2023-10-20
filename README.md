@@ -59,8 +59,6 @@ See also the list of [contributors](https://github.com/serjs/socks5-server/graph
 
 # Todo
 
-- General cleanup, modernization, etc
-- IP support masking (CIDR)
 - Switch to logrus?
 - multi FQDN regex with pre-compile testing and optimizations
 - metrics, possibly exposed via prometheus-style endpoint, with status lander

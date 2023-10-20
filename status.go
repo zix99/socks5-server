@@ -26,9 +26,11 @@ func serveStatusPage(server *socks5.Server, addr string) {
 		defer buf.Flush()
 
 		server.RangeHostMetrics(func(host string, m *socks5.HostMetrics) {
-			buf.WriteString(fmt.Sprintf("proxy_connect_active{remote='%s'} %d\n", host, m.Active.Load()))
+			buf.WriteString(fmt.Sprintf("proxy_connect_tx{remote=\"%s\"} %d\n", host, m.Tx.Load()))
+			buf.WriteString(fmt.Sprintf("proxy_connect_rx{remote=\"%s\"} %d\n", host, m.Rx.Load()))
+			buf.WriteString(fmt.Sprintf("proxy_connect_active{remote=\"%s\"} %d\n", host, m.Active.Load()))
 			for i := 0; i < len(m.Commands); i++ {
-				buf.WriteString(fmt.Sprintf("proxy_connect_count{remote='%s',command=%d} %d\n", host, i, m.Commands[i].Load()))
+				buf.WriteString(fmt.Sprintf("proxy_connect_count{remote=\"%s\",command=\"%d\"} %d\n", host, i, m.Commands[i].Load()))
 			}
 		})
 	})

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -197,19 +198,17 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		return fmt.Errorf("Failed to send reply: %v", err)
 	}
 
-	// Start proxying
-	errCh := make(chan error, 2)
-	go proxy(target, req.bufConn, errCh)
-	go proxy(conn, target, errCh)
+	// Proxy
+	proxyTx := proxym(&host.Tx, target, req.bufConn)
+	proxyRx := proxym(&host.Rx, conn, target)
 
-	// Wait
-	for i := 0; i < 2; i++ {
-		e := <-errCh
-		if e != nil {
-			// return from this function closes target (and conn).
-			return e
-		}
+	if err := <-proxyRx; err != nil {
+		return err
 	}
+	if err := <-proxyTx; err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -260,10 +259,29 @@ type closeWriter interface {
 
 // proxy is used to shuffle data from src to destination, and sends errors
 // down a dedicated channel
-func proxy(dst io.Writer, src io.Reader, errCh chan<- error) {
-	_, err := io.Copy(dst, src)
-	if tcpConn, ok := dst.(closeWriter); ok {
-		tcpConn.CloseWrite()
-	}
-	errCh <- err
+func proxym(metric *atomic.Int64, dst io.Writer, src io.Reader) <-chan error {
+	ret := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, err := src.Read(buf)
+			if n > 0 {
+				metric.Add(int64(n))
+
+				_, err := dst.Write(buf[:n])
+				if err != nil {
+					ret <- err
+					break
+				}
+			}
+			if err != nil {
+				ret <- err
+				break
+			}
+		}
+		if tcpConn, ok := dst.(closeWriter); ok {
+			tcpConn.CloseWrite()
+		}
+	}()
+	return ret
 }
