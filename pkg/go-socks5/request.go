@@ -199,8 +199,8 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	}
 
 	// Proxy
-	proxyTx := proxym(&host.Tx, target, req.bufConn)
-	proxyRx := proxym(&host.Rx, conn, target)
+	proxyTx := proxy(&host.Tx, target, req.bufConn)
+	proxyRx := proxy(&host.Rx, conn, target)
 
 	if err := <-proxyRx; err != nil {
 		return err
@@ -259,7 +259,7 @@ type closeWriter interface {
 
 // proxy is used to shuffle data from src to destination, and sends errors
 // down a dedicated channel
-func proxym(metric *atomic.Int64, dst io.Writer, src io.Reader) <-chan error {
+func proxy(metric *atomic.Int64, dst io.Writer, src io.Reader) <-chan error {
 	ret := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 1024)
