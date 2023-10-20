@@ -2,6 +2,7 @@ package socks5
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -275,7 +276,11 @@ func proxy(metric *atomic.Int64, dst io.Writer, src io.Reader) <-chan error {
 				}
 			}
 			if err != nil {
-				ret <- err
+				if !errors.Is(err, io.EOF) {
+					ret <- err
+				} else {
+					ret <- nil
+				}
 				break
 			}
 		}
