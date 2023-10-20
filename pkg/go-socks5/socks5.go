@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -52,11 +54,20 @@ type Config struct {
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+type HostMetrics struct {
+	Commands [4]atomic.Int64
+	Active   atomic.Int64
+	Rx, Tx   atomic.Int64
+}
+
 // Server is reponsible for accepting connections and handling
 // the details of the SOCKS5 protocol
 type Server struct {
 	config      *Config
 	authMethods map[uint8]Authenticator
+
+	metrixMux   sync.Mutex
+	hostMetrics map[string]*HostMetrics
 }
 
 // New creates a new Server and potentially returns an error
@@ -72,7 +83,7 @@ func New(conf *Config) (*Server, error) {
 
 	// Ensure we have a DNS resolver
 	if conf.Resolver == nil {
-		conf.Resolver = DNSResolver{}
+		conf.Resolver = SysDNSResolver{}
 	}
 
 	// Ensure we have a rule set
@@ -86,7 +97,8 @@ func New(conf *Config) (*Server, error) {
 	}
 
 	server := &Server{
-		config: conf,
+		config:      conf,
+		hostMetrics: make(map[string]*HostMetrics),
 	}
 
 	server.authMethods = make(map[uint8]Authenticator)
@@ -130,9 +142,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 		return err
 	}
 	ip := net.ParseIP(clientIP)
-	if s.config.Filter == nil || s.config.Filter.Allowed(ip) {
-		s.config.Logger.Printf("[INFO] socks: Connection from allowed IP address: %s", clientIP)
-	} else {
+	if s.config.Filter != nil && !s.config.Filter.Allowed(ip) {
 		s.config.Logger.Printf("[WARN] socks: Connection from not allowed IP address: %s", clientIP)
 		return fmt.Errorf("connection from not allowed IP address")
 	}
@@ -181,4 +191,26 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	return nil
+}
+
+func (s *Server) getHostMetrics(host string) *HostMetrics {
+	s.metrixMux.Lock()
+	defer s.metrixMux.Unlock()
+
+	m := s.hostMetrics[host]
+	if m == nil {
+		m = &HostMetrics{}
+		s.hostMetrics[host] = m
+	}
+
+	return m
+}
+
+func (s *Server) RangeHostMetrics(f func(host string, m *HostMetrics)) {
+	s.metrixMux.Lock()
+	defer s.metrixMux.Unlock()
+
+	for host, metric := range s.hostMetrics {
+		f(host, metric)
+	}
 }

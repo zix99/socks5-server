@@ -137,6 +137,9 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 		req.realDestAddr = s.config.Rewriter.Rewrite(ctx, req)
 	}
 
+	// Record metrics
+	s.getHostMetrics(req.RemoteAddr.IP.String()).Commands[req.Command].Add(1)
+
 	// Switch on the command
 	switch req.Command {
 	case ConnectCommand:
@@ -146,6 +149,7 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 	case AssociateCommand:
 		return s.handleAssociate(ctx, conn, req)
 	default:
+		// s.Metrics.NotSupported.Add(1)
 		if err := sendReply(conn, commandNotSupported, nil); err != nil {
 			return fmt.Errorf("Failed to send reply: %v", err)
 		}
@@ -155,6 +159,12 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
+	s.config.Logger.Printf("%s connect to %s", req.RemoteAddr.String(), req.realDestAddr.String())
+
+	host := s.getHostMetrics(req.RemoteAddr.IP.String())
+	host.Active.Add(1)
+	defer host.Active.Add(-1)
+
 	// Check if this is allowed
 	if ok := s.config.Rules.Allow(ctx, req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
@@ -250,7 +260,7 @@ type closeWriter interface {
 
 // proxy is used to shuffle data from src to destination, and sends errors
 // down a dedicated channel
-func proxy(dst io.Writer, src io.Reader, errCh chan error) {
+func proxy(dst io.Writer, src io.Reader, errCh chan<- error) {
 	_, err := io.Copy(dst, src)
 	if tcpConn, ok := dst.(closeWriter); ok {
 		tcpConn.CloseWrite()

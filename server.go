@@ -10,11 +10,14 @@ import (
 )
 
 type params struct {
-	User            string   `env:"PROXY_USER" envDefault:""`
-	Password        string   `env:"PROXY_PASSWORD,unset" envDefault:""`
-	Port            string   `env:"PROXY_PORT" envDefault:"1080"`
-	AllowedDestFqdn string   `env:"ALLOWED_DEST_FQDN" envDefault:""`
-	AllowedCIDRs    []string `env:"ALLOWED_CIDR" envSeparator:"," envDefault:""`
+	User             string   `env:"PROXY_USER" envDefault:""`
+	Password         string   `env:"PROXY_PASSWORD,unset" envDefault:""`
+	Port             string   `env:"PROXY_PORT" envDefault:"1080"`
+	StatusPort       string   `env:"PROXY_STATUS_PORT"`
+	ProxyResolver    string   `env:"PROXY_RESOLVER"`
+	ProxyResolverNet string   `env:"PROXY_RESOLVER_NET" envDefault:"ip4"` // ip, ip4, ip6
+	AllowedDestFqdn  string   `env:"ALLOWED_DEST_FQDN" envDefault:""`
+	AllowedCIDRs     []string `env:"ALLOWED_CIDR" envSeparator:"," envDefault:""`
 }
 
 func main() {
@@ -22,7 +25,7 @@ func main() {
 	cfg := params{}
 	err := env.Parse(&cfg)
 	if err != nil {
-		log.Printf("%+v\n", err)
+		log.Fatalf("%+v\n", err)
 	}
 
 	//Initialize socks5 config
@@ -41,7 +44,7 @@ func main() {
 	if cfg.AllowedDestFqdn != "" {
 		rules, err := PermitDestAddrPattern(cfg.AllowedDestFqdn)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 		socks5conf.Rules = rules
 	}
@@ -49,14 +52,22 @@ func main() {
 	if len(cfg.AllowedCIDRs) > 0 {
 		cidrSet, err := socks5.NewCidrSet(cfg.AllowedCIDRs...)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 		socks5conf.Filter = cidrSet
+	}
+
+	if cfg.ProxyResolver != "" {
+		socks5conf.Resolver = socks5.NewCustomResolver(cfg.ProxyResolver, cfg.ProxyResolverNet)
 	}
 
 	server, err := socks5.New(socks5conf)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if cfg.StatusPort != "" {
+		go serveStatusPage(server, ":"+cfg.StatusPort)
 	}
 
 	log.Printf("Start listening proxy service on port %s\n", cfg.Port)
