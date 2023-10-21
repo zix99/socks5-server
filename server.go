@@ -1,12 +1,12 @@
 package main
 
 import (
-	"log"
 	"os"
 
 	"socks5-server-ng/pkg/go-socks5"
 
 	"github.com/caarlos0/env/v9"
+	"github.com/sirupsen/logrus"
 )
 
 type params struct {
@@ -25,13 +25,11 @@ func main() {
 	cfg := params{}
 	err := env.Parse(&cfg)
 	if err != nil {
-		log.Fatalf("%+v\n", err)
+		logrus.Fatalf("%+v\n", err)
 	}
 
 	//Initialize socks5 config
-	socks5conf := &socks5.Config{
-		Logger: log.New(os.Stdout, "", log.LstdFlags),
-	}
+	socks5conf := &socks5.Config{}
 
 	if cfg.User+cfg.Password != "" {
 		creds := socks5.StaticCredentials{
@@ -44,7 +42,7 @@ func main() {
 	if cfg.AllowedDestFqdn != "" {
 		rules, err := PermitDestAddrPattern(cfg.AllowedDestFqdn)
 		if err != nil {
-			log.Fatal(err)
+			logrus.Fatal(err)
 		}
 		socks5conf.Rules = rules
 	}
@@ -52,7 +50,7 @@ func main() {
 	if len(cfg.AllowedCIDRs) > 0 {
 		cidrSet, err := socks5.NewCidrSet(cfg.AllowedCIDRs...)
 		if err != nil {
-			log.Fatal(err)
+			logrus.Fatal(err)
 		}
 		socks5conf.Filter = cidrSet
 	}
@@ -63,15 +61,15 @@ func main() {
 
 	server, err := socks5.New(socks5conf)
 	if err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 
 	if cfg.StatusPort != "" {
 		go serveStatusPage(server, ":"+cfg.StatusPort)
 	}
 
-	log.Printf("Start listening proxy service on port %s\n", cfg.Port)
+	logrus.Infof("Start listening proxy service on port %s\n", cfg.Port)
 	if err := server.ListenAndServe("tcp", ":"+cfg.Port); err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 }

@@ -161,7 +161,7 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
-	s.config.Logger.Printf("%s connect to %s", req.RemoteAddr.String(), req.realDestAddr.String())
+	s.config.Logger.Infof("%s connect to %s", req.RemoteAddr.String(), req.realDestAddr.String())
 
 	host := s.getHostMetrics(req.RemoteAddr.IP.String())
 	host.Active.Add(1)

@@ -3,9 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net/http"
 	"socks5-server-ng/pkg/go-socks5"
+
+	"github.com/sirupsen/logrus"
 )
 
 var template = `
@@ -35,8 +36,8 @@ func serveStatusPage(server *socks5.Server, addr string) {
 		})
 	})
 
-	log.Printf("Starting status page on http://%s", addr)
+	logrus.Printf("Starting status page on http://%s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 }

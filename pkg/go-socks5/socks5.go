@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -46,9 +46,12 @@ type Config struct {
 	// BindIP is used for bind or udp associate
 	BindIP net.IP
 
+	// Detailed metrics (per-downstream)
+	DetailedMetrics bool
+
 	// Logger can be used to provide a custom log target.
 	// Defaults to stdout.
-	Logger *log.Logger
+	Logger *logrus.Logger
 
 	// Optional function for dialing out
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -93,7 +96,7 @@ func New(conf *Config) (*Server, error) {
 
 	// Ensure we have a log target
 	if conf.Logger == nil {
-		conf.Logger = log.New(os.Stdout, "", log.LstdFlags)
+		conf.Logger = logrus.StandardLogger()
 	}
 
 	server := &Server{
@@ -138,26 +141,26 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	// Check client IP against whitelist
 	clientIP, _, err := net.SplitHostPort(conn.RemoteAddr().String())
 	if err != nil {
-		s.config.Logger.Printf("[ERR] socks: Failed to get client IP address: %v", err)
+		s.config.Logger.Errorf("socks: Failed to get client IP address: %v", err)
 		return err
 	}
 	ip := net.ParseIP(clientIP)
 	if s.config.Filter != nil && !s.config.Filter.Allowed(ip) {
-		s.config.Logger.Printf("[WARN] socks: Connection from not allowed IP address: %s", clientIP)
+		s.config.Logger.Warnf("socks: Connection from not allowed IP address: %s", clientIP)
 		return fmt.Errorf("connection from not allowed IP address")
 	}
 
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		s.config.Logger.Printf("[ERR] socks: Failed to get version byte: %v", err)
+		s.config.Logger.Errorf("socks: Failed to get version byte: %v", err)
 		return err
 	}
 
 	// Ensure we are compatible
 	if version[0] != socks5Version {
 		err := fmt.Errorf("Unsupported SOCKS version: %v", version)
-		s.config.Logger.Printf("[ERR] socks: %v", err)
+		s.config.Logger.Errorf("socks: %v", err)
 		return err
 	}
 
@@ -165,7 +168,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {
 		err = fmt.Errorf("Failed to authenticate: %v", err)
-		s.config.Logger.Printf("[ERR] socks: %v", err)
+		s.config.Logger.Warnf("socks: %v", err)
 		return err
 	}
 
@@ -186,7 +189,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	// Process the client request
 	if err := s.handleRequest(request, conn); err != nil {
 		err = fmt.Errorf("Failed to handle request: %v", err)
-		s.config.Logger.Printf("[ERR] socks: %v", err)
+		s.config.Logger.Errorf("socks: %v", err)
 		return err
 	}
 
