@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -140,7 +141,9 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 	}
 
 	// Record metrics
-	s.getHostMetrics(req.RemoteAddr.IP.String()).Commands[req.Command].Add(1)
+	metrics := s.getHostMetrics(req.RemoteAddr.IP.String())
+	metrics.Commands[req.Command].Add(1)
+	metrics.LastSeen.Store(time.Now())
 
 	// Switch on the command
 	switch req.Command {
