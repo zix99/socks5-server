@@ -58,10 +58,11 @@ type Config struct {
 }
 
 type HostMetrics struct {
-	Commands [4]atomic.Int64
-	Active   atomic.Int64
-	Rx, Tx   atomic.Int64
-	LastSeen atomic.Value
+	Commands  [4]atomic.Int64
+	Active    atomic.Int64
+	ActiveUDP atomic.Int64
+	Rx, Tx    atomic.Int64
+	LastSeen  atomic.Value
 }
 
 // Server is reponsible for accepting connections and handling

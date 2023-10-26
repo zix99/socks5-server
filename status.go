@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net/http"
+	"runtime"
 	"socks5-server-ng/pkg/go-socks5"
 	"text/template"
 	"time"
@@ -21,6 +22,7 @@ var statusTemplate = template.Must(template.New("status").Parse(`
 				<th>Host</th>
 				<th>Last Seen</th>
 				<th>Active</th>
+				<th>UDP</th>
 				<th>Rx</th>
 				<th>Tx</th>
 			</tr>
@@ -29,6 +31,7 @@ var statusTemplate = template.Must(template.New("status").Parse(`
 				<td>{{$host.Host}}</td>
 				<td>{{$host.LastSeen.Format "2006-01-02 15:04:05"}}</td>
 				<td>{{$host.Active}}</td>
+				<td>{{$host.ActiveUDP}}</td>
 				<td>{{$host.Rx}}</td>
 				<td>{{$host.Tx}}</td>
 			</tr>
@@ -37,6 +40,8 @@ var statusTemplate = template.Must(template.New("status").Parse(`
 		<h2>Global</h2>
 		<strong>Hosts:</strong> {{.HostCount}}<br>
 		<strong>Rx:</strong> {{.Rx}} <strong>Tx:</strong> {{.Tx}}<br>
+		<h2>Runtime</h2>
+		{{.RuntimeMetrics}}
 		<hr />
 		<a href="/metrics">Prometheus Metrics</a>
 	</body>
@@ -58,14 +63,16 @@ func (s ByteSize) String() string {
 }
 
 type StatusModelHost struct {
-	Host     string
-	LastSeen time.Time
-	Active   int64
-	Rx, Tx   ByteSize
+	Host      string
+	LastSeen  time.Time
+	Active    int64
+	ActiveUDP int64
+	Rx, Tx    ByteSize
 }
 
 type StatusModel struct {
-	Hosts []StatusModelHost
+	Hosts          []StatusModelHost
+	RuntimeMetrics string
 }
 
 func (s *StatusModel) Rx() (ret ByteSize) {
@@ -89,14 +96,19 @@ func (s *StatusModel) HostCount() int {
 func serveStatusPage(server *socks5.Server, addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		model := &StatusModel{}
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		model := &StatusModel{
+			RuntimeMetrics: fmt.Sprintf("Heap=%d, InUse=%d, Total=%d, Sys=%d, NumGC=%d, GoRoutines=%d", stats.HeapAlloc, stats.HeapInuse, stats.TotalAlloc, stats.Sys, stats.NumGC, runtime.NumGoroutine()),
+		}
 		server.RangeHostMetrics(func(host string, m *socks5.HostMetrics) {
 			model.Hosts = append(model.Hosts, StatusModelHost{
-				Host:     host,
-				LastSeen: m.LastSeen.Load().(time.Time),
-				Active:   m.Active.Load(),
-				Rx:       ByteSize(m.Rx.Load()),
-				Tx:       ByteSize(m.Tx.Load()),
+				Host:      host,
+				LastSeen:  m.LastSeen.Load().(time.Time),
+				Active:    m.Active.Load(),
+				ActiveUDP: m.ActiveUDP.Load(),
+				Rx:        ByteSize(m.Rx.Load()),
+				Tx:        ByteSize(m.Tx.Load()),
 			})
 		})
 		statusTemplate.Execute(w, &model)
@@ -109,10 +121,34 @@ func serveStatusPage(server *socks5.Server, addr string) {
 			buf.WriteString(fmt.Sprintf("proxy_connect_tx{remote=\"%s\"} %d\n", host, m.Tx.Load()))
 			buf.WriteString(fmt.Sprintf("proxy_connect_rx{remote=\"%s\"} %d\n", host, m.Rx.Load()))
 			buf.WriteString(fmt.Sprintf("proxy_connect_active{remote=\"%s\"} %d\n", host, m.Active.Load()))
+			buf.WriteString(fmt.Sprintf("proxy_connect_active_udp{remote=\"%s\"} %d\n", host, m.ActiveUDP.Load()))
 			for i := 0; i < len(m.Commands); i++ {
 				buf.WriteString(fmt.Sprintf("proxy_connect_count{remote=\"%s\",command=\"%d\"} %d\n", host, i, m.Commands[i].Load()))
 			}
 		})
+
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+
+		p := make([]runtime.StackRecord, 32)
+		numThreads, _ := runtime.ThreadCreateProfile(p)
+
+		buf.WriteString("# Go metrics\n")
+		buf.WriteString(fmt.Sprintf("go_goroutines %d\n", runtime.NumGoroutine()))
+		buf.WriteString(fmt.Sprintf("go_threads %d\n", numThreads))
+		buf.WriteString(fmt.Sprintf("go_info %s\n", runtime.Version()))
+
+		buf.WriteString(fmt.Sprintf("go_memstats_alloc_bytes %d\n", stats.HeapAlloc))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_alloc_bytes %d\n", stats.HeapAlloc))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_sys_bytes %d\n", stats.HeapSys))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_idle_bytes %d\n", stats.HeapIdle))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_inuse_bytes %d\n", stats.HeapInuse))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_released_bytes %d\n", stats.HeapReleased))
+		buf.WriteString(fmt.Sprintf("go_memstats_heap_objects %d\n", stats.HeapObjects))
+
+		buf.WriteString(fmt.Sprintf("go_memstats_stack_inuse_bytes %d\n", stats.StackInuse))
+		buf.WriteString(fmt.Sprintf("go_memstats_stack_sys_bytes %d\n", stats.StackSys))
+
 	})
 
 	logrus.Printf("Starting status page on http://%s", addr)

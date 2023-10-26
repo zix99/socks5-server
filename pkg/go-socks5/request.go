@@ -1,6 +1,7 @@
 package socks5
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/puzpuzpuz/xsync/v3"
 )
 
 const (
@@ -218,6 +221,8 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 
 // handleBind is used to handle a connect command
 func (s *Server) handleBind(ctx context.Context, conn conn, req *Request) error {
+	s.config.Logger.Warnf("Bind requested by %s, but unsupported", req.RemoteAddr)
+
 	// Check if this is allowed
 	if ok := s.config.Rules.Allow(ctx, req); !ok {
 		if err := sendReply(conn, ruleFailure, nil); err != nil {
@@ -243,11 +248,129 @@ func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) e
 		return fmt.Errorf("Associate to %v blocked by rules", req.DestAddr)
 	}
 
-	// TODO: Support associate
-	if err := sendReply(conn, commandNotSupported, nil); err != nil {
-		return fmt.Errorf("Failed to send reply: %v", err)
+	metric := s.getHostMetrics(req.RemoteAddr.IP.String())
+	metric.ActiveUDP.Add(1)
+	defer metric.ActiveUDP.Add(-1)
+
+	// Create UDP to listen on
+	listenUdpSock, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		sendReply(conn, serverFailure, nil)
+		s.config.Logger.Warn(err)
+		return err
 	}
+	defer listenUdpSock.Close()
+
+	// Tell client we've opened a UDP socket
+	bindAddr := listenUdpSock.LocalAddr().(*net.UDPAddr)
+	s.config.Logger.Infof("%s associate with %s", req.RemoteAddr.String(), bindAddr.String())
+	if err := sendReply(conn, successReply, &AddrSpec{IP: bindAddr.IP, Port: bindAddr.Port}); err != nil {
+		return err
+	}
+
+	// Start receiving on UDP
+	go s.handleAssociateConnection(ctx, metric, req.RemoteAddr, listenUdpSock)
+
+	// Wait to read EOF/Closed
+	for {
+		miscBuf := make([]byte, 128)
+		if n, err := req.bufConn.Read(miscBuf); err != nil {
+			s.config.Logger.Debugf("Socket closed: %s", listenUdpSock.LocalAddr().String())
+			break
+		} else {
+			s.config.Logger.Warnf("Received %d bytes of unexpected data from %s", n, req.RemoteAddr.String())
+		}
+	}
+
 	return nil
+}
+
+func (s *Server) handleAssociateConnection(ctx context.Context, metric *HostMetrics, reqDestAddr *AddrSpec, sock *net.UDPConn) {
+	const BUF_SIZE = 4096
+	buf := make([]byte, BUF_SIZE)
+	targetConns := xsync.NewMapOf[string, net.Conn]()
+	defer func() {
+		targetConns.Range(func(key string, value net.Conn) bool {
+			value.Close()
+			return true
+		})
+		targetConns.Clear()
+	}()
+
+	for {
+		n, srcAddr, err := sock.ReadFromUDP(buf)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				break
+			}
+			continue
+		}
+
+		reader := bytes.NewReader(buf[:n])
+
+		// Skip RSV & frag
+		reader.Seek(3, io.SeekCurrent)
+
+		// parse datagram
+		targetAddr, _ := readAddrSpec(reader)
+		headerEndPos, _ := reader.Seek(0, io.SeekCurrent)
+		header := buf[:headerEndPos]
+		data := buf[headerEndPos : n-int(headerEndPos)]
+
+		// Check if src equal
+		if !srcAddr.IP.Equal(reqDestAddr.IP) {
+			s.config.Logger.Warnf("UDP Source packet (%s) is not expected (%s)", srcAddr, reqDestAddr)
+			continue
+		}
+
+		// Start proxying to target (UDP-style)
+		targetKey := srcAddr.String() + "--" + targetAddr.String()
+		targetSock, hasTargetSock := targetConns.Load(targetKey)
+		if !hasTargetSock {
+			targetSock, err = s.dial(ctx, "udp", targetAddr.Address())
+			if err != nil {
+				continue
+			}
+			targetConns.Store(targetKey, targetSock)
+			s.config.Logger.Debugf("New UDP target %s for %s", targetAddr.Address(), srcAddr.String())
+
+			// Start proxy target back to client
+			go func() {
+				defer func() {
+					targetSock.Close()
+					targetConns.Delete(targetKey)
+					s.config.Logger.Debugf("Closed %s", targetKey)
+				}()
+
+				for {
+					buf := make([]byte, BUF_SIZE)
+					n, err := targetSock.Read(buf)
+					if err != nil {
+						break
+					}
+					// Wrap header
+					ret := make([]byte, n+len(header))
+					copy(ret, header)
+					copy(ret[len(header):], buf[:n])
+					// Send to src
+					metric.Rx.Add(int64(n))
+					if _, err := sock.WriteToUDP(ret, srcAddr); err != nil {
+						break
+					}
+				}
+			}()
+		}
+
+		// Pass data to target
+		metric.Tx.Add(int64(len(data)))
+		if _, err := targetSock.Write(data); err != nil {
+			if !errors.Is(err, io.EOF) || !errors.Is(err, net.ErrClosed) {
+				s.config.Logger.Warnf("Error sending for %s: %v", targetSock.RemoteAddr().String(), err)
+			}
+			targetSock.Close()
+			continue
+		}
+	}
 }
 
 func (s *Server) dial(ctx context.Context, network, addr string) (net.Conn, error) {

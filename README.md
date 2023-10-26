@@ -1,6 +1,6 @@
 # go-socks5-proxy-ng
 
-Based on [serjs/socks5-server](https://github.com/serjs/socks5-server) with modern go features, metrics, and more configurability.
+Based on [serjs/socks5-server](https://github.com/serjs/socks5-server) with modern go features, UDP Associate support, metrics, and more configurability.
 
 Simple socks5 server using go-socks5 with authentication, allowed ips list and destination FQDNs filtering
 
@@ -56,13 +56,6 @@ or
 * **Sergey Bogayrets**
 
 See also the list of [contributors](https://github.com/serjs/socks5-server/graphs/contributors) who participated in this project.
-
-# Todo
-
-- Switch to logrus?
-- multi FQDN regex with pre-compile testing and optimizations
-- metrics, possibly exposed via prometheus-style endpoint, with status lander
-- support associate/udp (https://quic.nginx.org/)
 
 # License
 MIT

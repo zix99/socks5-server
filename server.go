@@ -16,6 +16,7 @@ type params struct {
 	StatusPort       string   `env:"PROXY_STATUS_PORT"`
 	ProxyResolver    string   `env:"PROXY_RESOLVER"`
 	ProxyResolverNet string   `env:"PROXY_RESOLVER_NET" envDefault:"ip4"` // ip, ip4, ip6
+	Verbose          bool     `env:"PROXY_VERBOSE"`
 	AllowedDestFqdn  string   `env:"ALLOWED_DEST_FQDN" envDefault:""`
 	AllowedCIDRs     []string `env:"ALLOWED_CIDR" envSeparator:"," envDefault:""`
 }
@@ -26,6 +27,12 @@ func main() {
 	err := env.Parse(&cfg)
 	if err != nil {
 		logrus.Fatalf("%+v\n", err)
+	}
+
+	// verbose?
+	if cfg.Verbose {
+		logrus.SetLevel(logrus.DebugLevel)
+		logrus.Debugf("Verbose logging enabled")
 	}
 
 	//Initialize socks5 config
