@@ -16,6 +16,7 @@ type params struct {
 	StatusPort       string   `env:"PROXY_STATUS_PORT"`
 	ProxyResolver    string   `env:"PROXY_RESOLVER"`
 	ProxyResolverNet string   `env:"PROXY_RESOLVER_NET" envDefault:"ip4"` // ip, ip4, ip6
+	ProxyRequireFQDN bool     `env:"PROXY_REQUIRE_FQDN"`                  // if true, require the FQDN (rather than IP). Forces resolver to work
 	Verbose          bool     `env:"PROXY_VERBOSE"`
 	AllowedDestFqdn  string   `env:"ALLOWED_DEST_FQDN" envDefault:""`
 	AllowedCIDRs     []string `env:"ALLOWED_CIDR" envSeparator:"," envDefault:""`
@@ -46,13 +47,22 @@ func main() {
 		socks5conf.AuthMethods = []socks5.Authenticator{cator}
 	}
 
+	rules := socks5.PermitChain{}
+
 	if cfg.AllowedDestFqdn != "" {
-		rules, err := PermitDestAddrPattern(cfg.AllowedDestFqdn)
+		destAddrRule, err := PermitDestAddrPattern(cfg.AllowedDestFqdn)
 		if err != nil {
 			logrus.Fatal(err)
 		}
-		socks5conf.Rules = rules
+		rules = append(rules, destAddrRule)
 	}
+
+	if cfg.ProxyRequireFQDN {
+		rules = append(rules, RuleRequireFQDN())
+	}
+
+	rules = append(rules, socks5.PermitAll())
+	socks5conf.Rules = rules
 
 	if len(cfg.AllowedCIDRs) > 0 {
 		cidrSet, err := socks5.NewCidrSet(cfg.AllowedCIDRs...)

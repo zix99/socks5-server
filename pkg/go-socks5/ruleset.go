@@ -7,33 +7,32 @@ type RuleSet interface {
 	Allow(ctx context.Context, req *Request) bool
 }
 
+// Permit value globally
+type PermitDefault struct {
+	Value bool
+}
+
 // PermitAll returns a RuleSet which allows all types of connections
 func PermitAll() RuleSet {
-	return &PermitCommand{true, true, true}
+	return &PermitDefault{true}
 }
 
 // PermitNone returns a RuleSet which disallows all types of connections
 func PermitNone() RuleSet {
-	return &PermitCommand{false, false, false}
+	return &PermitDefault{false}
 }
 
-// PermitCommand is an implementation of the RuleSet which
-// enables filtering supported commands
-type PermitCommand struct {
-	EnableConnect   bool
-	EnableBind      bool
-	EnableAssociate bool
+func (p *PermitDefault) Allow(ctx context.Context, req *Request) bool {
+	return p.Value
 }
 
-func (p *PermitCommand) Allow(ctx context.Context, req *Request) bool {
-	switch req.Command {
-	case ConnectCommand:
-		return p.EnableConnect
-	case BindCommand:
-		return p.EnableBind
-	case AssociateCommand:
-		return p.EnableAssociate
+type PermitChain []RuleSet
+
+func (s PermitChain) Allow(ctx context.Context, req *Request) bool {
+	for _, rule := range s {
+		if !rule.Allow(ctx, req) {
+			return false
+		}
 	}
-
-	return false
+	return true
 }
