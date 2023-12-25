@@ -23,8 +23,13 @@ Simple socks5 server using go-socks5 with authentication, allowed ips list and d
 |PROXY_USER|String|EMPTY|Set proxy user (also required existed PROXY_PASS)|
 |PROXY_PASSWORD|String|EMPTY|Set proxy password for auth, used with PROXY_USER|
 |PROXY_PORT|String|1080|Set listen port for application inside docker container|
+|PROXY_STATUS_PORT|String|unset|Set port for http status page|
+|PROXY_RESOLVER|String|unset|Set DNS server, defaults to system|
+|PROXY_RESOLVER_NET|String|ip4|How to resolve domains|
+|PROXY_REQUIRE_FQDN|Bool|false|If set, requires fully qualified domain to connect|
+|PROXY_VERBOSE|bool|false|If set, more verbose logging|
 |ALLOWED_DEST_FQDN|String|EMPTY|Allowed destination address regular expression pattern. Default allows all.|
-|ALLOWED_IPS|String|Empty|Set allowed IP's that can connect to proxy, separator `,`|
+|ALLOWED_CIDR|[]String|Empty|Set allowed CIDR spaces that can connect to proxy, separator `,`|
 
 
 # Build your own image:
@@ -55,7 +60,7 @@ or
 
 * **Sergey Bogayrets**
 
-See also the list of [contributors](https://github.com/serjs/socks5-server/graphs/contributors) who participated in this project.
+See also the list of [contributors](https://github.com/zix99/socks5-server/graphs/contributors) who participated in this project.
 
 # License
 MIT
