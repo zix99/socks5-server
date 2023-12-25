@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime"
 	"socks5-server-ng/pkg/go-socks5"
+	"sort"
 	"text/template"
 	"time"
 
@@ -32,6 +33,23 @@ var statusTemplate = template.Must(template.New("status").Parse(`
 				<td>{{$host.LastSeen.Format "2006-01-02 15:04:05"}}</td>
 				<td>{{$host.Active}}</td>
 				<td>{{$host.ActiveUDP}}</td>
+				<td>{{$host.Rx}}</td>
+				<td>{{$host.Tx}}</td>
+			</tr>
+			{{end}}
+		</table>
+		<h2>Targets</h2>
+		<table border="1" cellspacing="0" cellpadding="4">
+			<tr>
+				<th>Host</th>
+				<th>Active</th>
+				<th>Rx</th>
+				<th>Tx</th>
+			</tr>
+			{{range $host := .Targets}}
+			<tr>
+				<td>{{$host.Host}}</td>
+				<td>{{$host.Active}}</td>
 				<td>{{$host.Rx}}</td>
 				<td>{{$host.Tx}}</td>
 			</tr>
@@ -72,6 +90,7 @@ type StatusModelHost struct {
 
 type StatusModel struct {
 	Hosts          []StatusModelHost
+	Targets        []StatusModelHost
 	RuntimeMetrics string
 }
 
@@ -111,6 +130,25 @@ func serveStatusPage(server *socks5.Server, addr string) {
 				Tx:        ByteSize(m.Tx.Load()),
 			})
 		})
+		sort.Slice(model.Hosts, func(i, j int) bool {
+			return model.Hosts[i].Rx > model.Hosts[j].Rx
+		})
+
+		server.RangeTargetMetrics(func(target string, m *socks5.NetMetrics) {
+			model.Targets = append(model.Targets, StatusModelHost{
+				Host:   target,
+				Active: m.Active.Load(),
+				Tx:     ByteSize(m.Tx.Load()),
+				Rx:     ByteSize(m.Rx.Load()),
+			})
+		})
+		sort.Slice(model.Targets, func(i, j int) bool {
+			if model.Targets[i].Active == model.Targets[j].Active {
+				return model.Targets[i].Rx > model.Targets[j].Rx
+			}
+			return model.Targets[i].Active > model.Targets[j].Active
+		})
+
 		statusTemplate.Execute(w, &model)
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v3"
@@ -58,6 +57,13 @@ func (a *AddrSpec) String() string {
 		return fmt.Sprintf("%s (%s):%d", a.FQDN, a.IP, a.Port)
 	}
 	return fmt.Sprintf("%s:%d", a.IP, a.Port)
+}
+
+func (a *AddrSpec) FqdnOrIP() string {
+	if a.FQDN != "" {
+		return a.FQDN
+	}
+	return a.IP.String()
 }
 
 // Address returns a string suitable to dial; prefer returning IP-based
@@ -144,7 +150,7 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 	}
 
 	// Record metrics
-	metrics := s.getHostMetrics(req.RemoteAddr.IP.String())
+	metrics := s.hostMetrics.Get(req.RemoteAddr.IP.String()).Value()
 	metrics.Commands[req.Command].Add(1)
 	metrics.LastSeen.Store(time.Now())
 
@@ -169,9 +175,13 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) error {
 	s.config.Logger.Infof("%s connect to %s", req.RemoteAddr.String(), req.realDestAddr.String())
 
-	host := s.getHostMetrics(req.RemoteAddr.IP.String())
+	host := s.hostMetrics.Get(req.RemoteAddr.IP.String()).Value()
 	host.Active.Add(1)
 	defer host.Active.Add(-1)
+
+	targetMetric := s.targetMetrics.Get(req.DestAddr.FqdnOrIP()).Value()
+	targetMetric.Active.Add(1)
+	defer targetMetric.Active.Add(-1)
 
 	// Check if this is allowed
 	if ok := s.config.Rules.Allow(ctx, req); !ok {
@@ -206,8 +216,14 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 	}
 
 	// Proxy
-	proxyTx := proxy(&host.Tx, target, req.bufConn)
-	proxyRx := proxy(&host.Rx, conn, target)
+	proxyTx := proxy(target, req.bufConn, func(i int) {
+		host.Tx.Add(int64(i))
+		targetMetric.Tx.Add(int64(i))
+	})
+	proxyRx := proxy(conn, target, func(i int) {
+		host.Rx.Add(int64(i))
+		targetMetric.Rx.Add(int64(i))
+	})
 
 	if err := <-proxyRx; err != nil {
 		return err
@@ -248,7 +264,7 @@ func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) e
 		return fmt.Errorf("Associate to %v blocked by rules", req.DestAddr)
 	}
 
-	metric := s.getHostMetrics(req.RemoteAddr.IP.String())
+	metric := s.hostMetrics.Get(req.RemoteAddr.IP.String()).Value()
 	metric.ActiveUDP.Add(1)
 	defer metric.ActiveUDP.Add(-1)
 
@@ -386,14 +402,16 @@ type closeWriter interface {
 
 // proxy is used to shuffle data from src to destination, and sends errors
 // down a dedicated channel
-func proxy(metric *atomic.Int64, dst io.Writer, src io.Reader) <-chan error {
+func proxy(dst io.Writer, src io.Reader, onRead func(int)) <-chan error {
 	ret := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 1024)
 		for {
 			n, err := src.Read(buf)
 			if n > 0 {
-				metric.Add(int64(n))
+				if onRead != nil {
+					onRead(n)
+				}
 
 				_, err := dst.Write(buf[:n])
 				if err != nil {

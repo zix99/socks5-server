@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/sirupsen/logrus"
 )
 
@@ -57,11 +58,15 @@ type Config struct {
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+type NetMetrics struct {
+	Active atomic.Int64
+	Rx, Tx atomic.Int64
+}
+
 type HostMetrics struct {
+	NetMetrics
 	Commands  [4]atomic.Int64
-	Active    atomic.Int64
 	ActiveUDP atomic.Int64
-	Rx, Tx    atomic.Int64
 	LastSeen  atomic.Value
 }
 
@@ -71,8 +76,8 @@ type Server struct {
 	config      *Config
 	authMethods map[uint8]Authenticator
 
-	metrixMux   sync.Mutex
-	hostMetrics map[string]*HostMetrics
+	hostMetrics   *ttlcache.Cache[string, *HostMetrics]
+	targetMetrics *ttlcache.Cache[string, *NetMetrics]
 }
 
 // New creates a new Server and potentially returns an error
@@ -102,9 +107,25 @@ func New(conf *Config) (*Server, error) {
 	}
 
 	server := &Server{
-		config:      conf,
-		hostMetrics: make(map[string]*HostMetrics),
+		config: conf,
+		hostMetrics: ttlcache.New[string, *HostMetrics](
+			ttlcache.WithTTL[string, *HostMetrics](24*time.Hour),
+			ttlcache.WithLoader[string, *HostMetrics](ttlcache.LoaderFunc[string, *HostMetrics](func(c *ttlcache.Cache[string, *HostMetrics], key string) *ttlcache.Item[string, *HostMetrics] {
+				item := c.Set(key, &HostMetrics{}, ttlcache.DefaultTTL)
+				return item
+			})),
+		),
+		targetMetrics: ttlcache.New[string, *NetMetrics](
+			ttlcache.WithTTL[string, *NetMetrics](30*time.Minute),
+			ttlcache.WithLoader[string, *NetMetrics](ttlcache.LoaderFunc[string, *NetMetrics](func(c *ttlcache.Cache[string, *NetMetrics], key string) *ttlcache.Item[string, *NetMetrics] {
+				item := c.Set(key, &NetMetrics{}, ttlcache.DefaultTTL)
+				return item
+			})),
+		),
 	}
+
+	go server.hostMetrics.Start()
+	go server.targetMetrics.Start()
 
 	server.authMethods = make(map[uint8]Authenticator)
 
@@ -113,6 +134,11 @@ func New(conf *Config) (*Server, error) {
 	}
 
 	return server, nil
+}
+
+func (s *Server) Close() {
+	s.hostMetrics.Stop()
+	s.targetMetrics.Stop()
 }
 
 // ListenAndServe is used to create a listener and serve on it
@@ -198,24 +224,16 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	return nil
 }
 
-func (s *Server) getHostMetrics(host string) *HostMetrics {
-	s.metrixMux.Lock()
-	defer s.metrixMux.Unlock()
-
-	m := s.hostMetrics[host]
-	if m == nil {
-		m = &HostMetrics{}
-		s.hostMetrics[host] = m
-	}
-
-	return m
+func (s *Server) RangeHostMetrics(f func(host string, m *HostMetrics)) {
+	s.hostMetrics.Range(func(item *ttlcache.Item[string, *HostMetrics]) bool {
+		f(item.Key(), item.Value())
+		return true
+	})
 }
 
-func (s *Server) RangeHostMetrics(f func(host string, m *HostMetrics)) {
-	s.metrixMux.Lock()
-	defer s.metrixMux.Unlock()
-
-	for host, metric := range s.hostMetrics {
-		f(host, metric)
-	}
+func (s *Server) RangeTargetMetrics(f func(target string, m *NetMetrics)) {
+	s.targetMetrics.Range(func(item *ttlcache.Item[string, *NetMetrics]) bool {
+		f(item.Key(), item.Value())
+		return true
+	})
 }
