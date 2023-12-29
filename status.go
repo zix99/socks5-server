@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"socks5-server-ng/pkg/bufpool"
 	"socks5-server-ng/pkg/go-socks5"
 	"sort"
 	"text/template"
@@ -59,7 +60,8 @@ var statusTemplate = template.Must(template.New("status").Parse(`
 		<strong>Hosts:</strong> {{.HostCount}}<br>
 		<strong>Rx:</strong> {{.Rx}} <strong>Tx:</strong> {{.Tx}}<br>
 		<h2>Runtime</h2>
-		{{.RuntimeMetrics}}
+		{{.RuntimeMetrics}}<br />
+		Pool: {{.PoolMetrics}}
 		<hr />
 		<a href="/metrics">Prometheus Metrics</a>
 	</body>
@@ -92,6 +94,7 @@ type StatusModel struct {
 	Hosts          []StatusModelHost
 	Targets        []StatusModelHost
 	RuntimeMetrics string
+	PoolMetrics    string
 }
 
 func (s *StatusModel) Rx() (ret ByteSize) {
@@ -117,8 +120,10 @@ func serveStatusPage(server *socks5.Server, addr string) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var stats runtime.MemStats
 		runtime.ReadMemStats(&stats)
+		pool := bufpool.Pool4096
 		model := &StatusModel{
 			RuntimeMetrics: fmt.Sprintf("Heap=%d, InUse=%d, Total=%d, Sys=%d, NumGC=%d, GoRoutines=%d", stats.HeapAlloc, stats.HeapInuse, stats.TotalAlloc, stats.Sys, stats.NumGC, runtime.NumGoroutine()),
+			PoolMetrics:    fmt.Sprintf("Size=%d/%d, Leased=%d, Misses=%d", pool.MetricPoolSize(), pool.MetricMaxSize(), pool.MetricLeased(), pool.MetricMisses()),
 		}
 		server.RangeHostMetrics(func(host string, m *socks5.HostMetrics) {
 			model.Hosts = append(model.Hosts, StatusModelHost{

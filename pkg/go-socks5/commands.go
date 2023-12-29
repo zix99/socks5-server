@@ -20,18 +20,18 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	// Handle on a per type basis
 	switch addrType[0] {
 	case ipv4Address:
-		addr := make([]byte, 4)
-		if _, err := io.ReadAtLeast(r, addr, len(addr)); err != nil {
+		addr := [4]byte{}
+		if _, err := io.ReadAtLeast(r, addr[:], len(addr)); err != nil {
 			return nil, err
 		}
-		d.IP = net.IP(addr)
+		d.IP = net.IP(addr[:])
 
 	case ipv6Address:
-		addr := make([]byte, 16)
-		if _, err := io.ReadAtLeast(r, addr, len(addr)); err != nil {
+		addr := [16]byte{}
+		if _, err := io.ReadAtLeast(r, addr[:], len(addr)); err != nil {
 			return nil, err
 		}
-		d.IP = net.IP(addr)
+		d.IP = net.IP(addr[:])
 
 	case fqdnAddress:
 		if _, err := r.Read(addrType); err != nil {
@@ -49,8 +49,8 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	}
 
 	// Read the port
-	port := []byte{0, 0}
-	if _, err := io.ReadAtLeast(r, port, 2); err != nil {
+	port := [...]byte{0, 0}
+	if _, err := io.ReadAtLeast(r, port[:], 2); err != nil {
 		return nil, err
 	}
 	d.Port = (int(port[0]) << 8) | int(port[1])

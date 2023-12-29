@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"socks5-server-ng/pkg/bufpool"
 	"strconv"
 	"strings"
 	"time"
@@ -100,8 +101,8 @@ type conn interface {
 // NewRequest creates a new Request from the tcp connection
 func NewRequest(bufConn io.Reader) (*Request, error) {
 	// Read the version byte
-	header := []byte{0, 0, 0}
-	if _, err := io.ReadAtLeast(bufConn, header, 3); err != nil {
+	header := [...]byte{0, 0, 0}
+	if _, err := io.ReadAtLeast(bufConn, header[:], 3); err != nil {
 		return nil, fmt.Errorf("Failed to get command version: %v", err)
 	}
 
@@ -288,9 +289,9 @@ func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) e
 	go s.handleAssociateConnection(ctx, metric, req.RemoteAddr, listenUdpSock)
 
 	// Wait to read EOF/Closed
+	miscBuf := [8]byte{}
 	for {
-		miscBuf := make([]byte, 128)
-		if n, err := req.bufConn.Read(miscBuf); err != nil {
+		if n, err := req.bufConn.Read(miscBuf[:]); err != nil {
 			s.config.Logger.Debugf("Socket closed: %s", listenUdpSock.LocalAddr().String())
 			break
 		} else {
@@ -302,8 +303,9 @@ func (s *Server) handleAssociate(ctx context.Context, conn conn, req *Request) e
 }
 
 func (s *Server) handleAssociateConnection(ctx context.Context, metric *HostMetrics, reqDestAddr *AddrSpec, sock *net.UDPConn) {
-	const BUF_SIZE = 4096
-	buf := make([]byte, BUF_SIZE)
+	buf := bufpool.Pool4096.Get()
+	defer bufpool.Pool4096.Return(buf)
+
 	targetConns := xsync.NewMapOf[string, net.Conn]()
 	defer func() {
 		targetConns.Range(func(key string, value net.Conn) bool {
@@ -358,19 +360,17 @@ func (s *Server) handleAssociateConnection(ctx context.Context, metric *HostMetr
 					s.config.Logger.Debugf("Closed %s", targetKey)
 				}()
 
+				buf := make([]byte, 4096+len(header))
+				copy(buf, header)
 				for {
-					buf := make([]byte, BUF_SIZE)
-					n, err := targetSock.Read(buf)
+					n, err := targetSock.Read(buf[len(header):])
 					if err != nil {
 						break
 					}
-					// Wrap header
-					ret := make([]byte, n+len(header))
-					copy(ret, header)
-					copy(ret[len(header):], buf[:n])
+
 					// Send to src
 					metric.Rx.Add(int64(n))
-					if _, err := sock.WriteToUDP(ret, srcAddr); err != nil {
+					if _, err := sock.WriteToUDP(buf[:len(header)+n], srcAddr); err != nil {
 						break
 					}
 				}
@@ -405,7 +405,9 @@ type closeWriter interface {
 func proxy(dst io.Writer, src io.Reader, onRead func(int)) <-chan error {
 	ret := make(chan error, 1)
 	go func() {
-		buf := make([]byte, 1024)
+		buf := bufpool.Pool4096.Get()
+		defer bufpool.Pool4096.Return(buf)
+
 		for {
 			n, err := src.Read(buf)
 			if n > 0 {
